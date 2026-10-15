@@ -1608,59 +1608,61 @@ async def test_multiple_chains_video_media_stays_chain_local():
 
 @pytest.mark.cpu
 @pytest.mark.level0
-@pytest.mark.parametrize(
-    ("media_kind", "message_factory", "extractor", "sent_url", "unsent_url", "backend_field", "trajectory_key"),
-    [
-        (
-            "image",
-            _image_message,
-            fake_vision_info_extractor,
-            "image://sent-a.png",
-            "image://unsent-b.png",
-            "image_data",
-            "images",
-        ),
-        (
-            "video",
-            _video_message,
-            _codec_compatible_video_extractor,
-            "video://sent-a.mp4",
-            "video://unsent-b.mp4",
-            "video_data",
-            "videos",
-        ),
-    ],
-)
 @pytest.mark.asyncio
-async def test_multiple_chains_rejects_incremental_media_without_mutating_stored_media(
-    media_kind, message_factory, extractor, sent_url, unsent_url, backend_field, trajectory_key
-):
-    """Reject unsupported CT media without mutating the selected chain."""
-    first_messages = [message_factory(sent_url, "describe first")]
+async def test_multiple_chains_rejects_incremental_video_without_mutating_stored_media():
+    """Reject unsupported CT video without mutating the selected chain."""
+    sent_url, unsent_url = "video://sent-a.mp4", "video://unsent-b.mp4"
+    first_messages = [_video_message(sent_url, "describe first")]
     continuation_messages = [
         *first_messages,
         {"role": "assistant", "content": "FIRST"},
-        message_factory(unsent_url, "new incremental media"),
+        _video_message(unsent_url, "new incremental media"),
     ]
-    expected_sent = [sent_url] if media_kind == "image" else [(sent_url, {"url": sent_url})]
+    expected_sent = [(sent_url, {"url": sent_url})]
     session = _session(
-        f"incremental-media-{media_kind}",
+        "incremental-media-video",
         processor=FakeProcessor(),
-        vision_info_extractor=extractor,
+        vision_info_extractor=_codec_compatible_video_extractor,
     )
     backend = SequencedBackend(["FIRST", "SHOULD_NOT_RUN"])
 
     await _run(session, backend, first_messages)
-    with pytest.raises(ValueError, match="does not currently support incremental image or video data"):
+    with pytest.raises(ValueError, match="does not currently support incremental video data"):
         await _run(session, backend, continuation_messages)
     trajectories = await session.finalize()
 
     assert len(backend.calls) == 1
     assert backend.steps == ["SHOULD_NOT_RUN"]
-    assert backend.calls[0][backend_field] == expected_sent
+    assert backend.calls[0]["video_data"] == expected_sent
     assert len(trajectories) == 1
-    assert trajectories[0].multi_modal_data == {trajectory_key: expected_sent}
+    assert trajectories[0].multi_modal_data == {"videos": expected_sent}
     assert trajectories[0].extra_fields == {}
+
+
+@pytest.mark.cpu
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_multiple_chains_continues_with_incremental_image():
+    """A screenshot that first appears mid-trajectory extends the chain's images in order."""
+    first_url, second_url = "image://sent-a.png", "image://later-b.png"
+    first_messages = [_image_message(first_url, "describe first")]
+    continuation_messages = [
+        *first_messages,
+        {"role": "assistant", "content": "FIRST"},
+        _image_message(second_url, "new screenshot"),
+    ]
+    session = _session("incremental-image", processor=FakeProcessor(), vision_info_extractor=fake_vision_info_extractor)
+    backend = SequencedBackend(["FIRST", "SECOND"])
+
+    await _run(session, backend, first_messages)
+    await _run(session, backend, continuation_messages)
+    trajectories = await session.finalize()
+
+    assert len(backend.calls) == 2
+    assert backend.calls[0]["image_data"] == [first_url]
+    assert backend.calls[1]["image_data"] == [first_url, second_url]
+    assert len(trajectories) == 1
+    assert trajectories[0].multi_modal_data == {"images": [first_url, second_url]}
 
 
 @pytest.mark.cpu
