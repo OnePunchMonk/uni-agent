@@ -89,3 +89,33 @@ async def test_failed_setup_raises_before_the_agent_runs(monkeypatch):
         await _task(monkeypatch, sandbox, agent).run()
 
     assert agent.messages is None
+
+
+def _config_with_tools(tools, **kwargs):
+    return GuiTaskConfig(
+        verify_command="true",
+        sandbox={"provider": "local"},
+        agent={"name": "react", "tools": tools},
+        **kwargs,
+    )
+
+
+@pytest.mark.cpu
+@pytest.mark.level0
+def test_task_display_is_propagated_to_gui_tools_only():
+    config = _config_with_tools(
+        [{"name": "gui_click"}, {"name": "finish"}, {"name": "gui_type", "display": ":9"}], display=":9"
+    )
+
+    assert config.agent.tools == [
+        {"name": "gui_click", "display": ":9"},
+        {"name": "finish"},
+        {"name": "gui_type", "display": ":9"},
+    ]
+
+
+@pytest.mark.cpu
+@pytest.mark.level0
+def test_conflicting_tool_display_is_rejected():
+    with pytest.raises(ValueError, match="uses display ':1' but the task display is ':9'"):
+        _config_with_tools([{"name": "gui_click", "display": ":1"}], display=":9")

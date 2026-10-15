@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..base import Task, TaskConfig, TaskResult
 from ..registry import register_task
@@ -30,6 +30,25 @@ class GuiTaskConfig(TaskConfig):
     )
     setup_timeout: float = Field(default=60.0, gt=0, description="Setup command timeout (s).")
     verify_timeout: float = Field(default=60.0, gt=0, description="Verify command timeout (s).")
+
+    @model_validator(mode="after")
+    def _share_display_with_gui_tools(self) -> GuiTaskConfig:
+        """Point the agent's ``gui_*`` tools at the task display, rejecting a conflicting one."""
+        tools = getattr(self.agent, "tools", None)
+        if not isinstance(tools, list):
+            return self
+        resolved = []
+        for entry in tools:
+            if isinstance(entry, dict) and str(entry.get("name", "")).startswith("gui_"):
+                if entry.get("display", self.display) != self.display:
+                    raise ValueError(
+                        f"tool {entry['name']!r} uses display {entry['display']!r} "
+                        f"but the task display is {self.display!r}"
+                    )
+                entry = {**entry, "display": self.display}
+            resolved.append(entry)
+        self.agent.tools = resolved
+        return self
 
 
 @register_task("gui")

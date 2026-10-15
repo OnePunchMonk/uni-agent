@@ -198,3 +198,17 @@ def test_relative_mode_is_announced_in_the_tool_description():
 
     assert "0-1000" in description
     assert "0-1000" not in _toolbox(_FakeSandbox()).schemas()[1]["function"]["description"]
+
+
+@pytest.mark.cpu
+@pytest.mark.level0
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["screenshot", "click"])
+async def test_command_timeout_is_a_timeout_result_not_an_error(tool):
+    sandbox = _FakeSandbox(exit_code=-1, stderr="exec timed out after 5s")
+
+    result = await _toolbox(sandbox).call(tool, {"x": 1, "y": 1} if tool == "click" else {}, timeout=5)
+
+    assert result.status == "timeout"
+    assert "did not finish within 5" in result.text
+    assert result.images == ()

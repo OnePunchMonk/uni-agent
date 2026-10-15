@@ -13,6 +13,7 @@ ground on a normalized grid (Qwen-VL family: 0-1000 over the image) use
 
 from __future__ import annotations
 
+import abc
 import asyncio
 import base64
 from typing import Any, ClassVar, Literal
@@ -22,7 +23,13 @@ from pydantic import BaseModel, Field
 from .base import Tool, ToolError, ToolResult, register_tool
 
 _SCREENSHOT_PATH = "/tmp/uni_agent_gui_screenshot.png"
+#: ``Sandbox.exec`` reports a command that hit its timeout with this exit code.
+_TIMEOUT_EXIT_CODE = -1
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class _CommandTimeout(Exception):
+    """A sandbox command exceeded its timeout; :meth:`_GuiTool.run` turns it into a ``timeout`` result."""
 
 
 class GuiConfig(BaseModel):
@@ -77,8 +84,19 @@ class _GuiTool(Tool):
         width, height = self._screen_size
         return min(round(x / 1000 * width), width - 1), min(round(y / 1000 * height), height - 1)
 
+    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+        try:
+            return await self._run(args, timeout=timeout)
+        except _CommandTimeout as exc:
+            return ToolResult(text=f"Timed out: {exc}", status="timeout")
+
+    @abc.abstractmethod
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult: ...
+
     async def _x(self, argv: list[str], *, timeout: float | None = None) -> None:
         result = await self.sandbox.exec(argv, timeout=timeout, env={"DISPLAY": self._cfg.display})
+        if result.exit_code == _TIMEOUT_EXIT_CODE:
+            raise _CommandTimeout(f"`{argv[0]}` did not finish within {timeout}s")
         if result.exit_code != 0:
             detail = (result.stderr or result.stdout).strip()[:500]
             raise ToolError(f"`{argv[0]}` failed (exit {result.exit_code}): {detail}")
@@ -107,7 +125,7 @@ class ScreenshotTool(_GuiTool):
     description = "Capture the current screen. Returns the image."
     args_model = _NoArguments
 
-    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
         return ToolResult(text="Screenshot of the current screen.", images=(await self._screenshot(timeout=timeout),))
 
 
@@ -127,7 +145,7 @@ class ClickTool(_GuiTool):
     description = "Move the mouse to (x, y) in the screenshot and click."
     args_model = ClickArguments
 
-    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
         x, y = await self._pixels(int(args["x"]), int(args["y"]))
         button = args.get("button", "left")
         repeat = "2" if args.get("double") else "1"
@@ -148,7 +166,7 @@ class TypeTool(_GuiTool):
     description = "Type text into the focused window. Use press_key for Enter, Tab and shortcuts."
     args_model = TypeArguments
 
-    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
         text = str(args["text"])
         # `--` keeps text that starts with `-` from being read as an xdotool option.
         await self._x(["xdotool", "type", "--delay", "12", "--", text], timeout=timeout)
@@ -169,7 +187,7 @@ class KeyTool(_GuiTool):
     description = "Press a key or key chord such as Return, Tab, Escape, ctrl+a or alt+F4."
     args_model = KeyArguments
 
-    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
         keys = str(args["keys"]).split()
         await self._x(["xdotool", "key", "--", *keys], timeout=timeout)
         return await self._done(f"Pressed {' '.join(keys)}.", timeout=timeout)
@@ -191,7 +209,7 @@ class ScrollTool(_GuiTool):
     description = "Scroll the mouse wheel at (x, y)."
     args_model = ScrollArguments
 
-    async def run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
+    async def _run(self, args: dict[str, Any], *, timeout: float | None = None) -> ToolResult:
         x, y = await self._pixels(int(args["x"]), int(args["y"]))
         direction, amount = args["direction"], int(args.get("amount", 3))
         await self._x(
