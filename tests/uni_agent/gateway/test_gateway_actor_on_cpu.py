@@ -864,8 +864,8 @@ async def test_gateway_actor_multimodal_reference_change_splits_trajectory(ray_r
 @pytest.mark.cpu
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_gateway_actor_rejects_ct_continuation_with_tool_returned_image(monkeypatch):
-    """Reject incremental media until Continuous Token context merging supports it."""
+async def test_gateway_actor_continues_ct_with_tool_returned_image(monkeypatch):
+    """A tool-returned image extends the trajectory's images instead of failing the request."""
     import uni_agent.gateway.session.codec as codec_mod
     from uni_agent.gateway.config import GatewayActorConfig
     from uni_agent.gateway.gateway import _GatewayActor
@@ -913,21 +913,25 @@ async def test_gateway_actor_rejects_ct_continuation_with_tool_returned_image(mo
         ],
     }
 
-    with pytest.raises(ValueError, match="does not currently support incremental image or video data"):
-        await actor._handle_openai_chat_completions(
-            "session-mm-tool-image",
-            {
-                "model": "dummy-model",
-                "tools": tools,
-                "messages": [initial_message, assistant_message, tool_message],
-            },
-        )
+    second = await actor._handle_openai_chat_completions(
+        "session-mm-tool-image",
+        {
+            "model": "dummy-model",
+            "tools": tools,
+            "messages": [initial_message, assistant_message, tool_message],
+        },
+    )
+    assert second.status_code == 200
+    assert json.loads(json.loads(second.body)["choices"][0]["message"]["content"])["image_data"] == [
+        "image://a.png",
+        "image://tool-b.png",
+    ]
 
     trajectories = await actor.finalize_session("session-mm-tool-image")
     await actor.shutdown()
 
     assert len(trajectories) == 1
-    assert trajectories[0].multi_modal_data == {"images": ["image://a.png"]}
+    assert trajectories[0].multi_modal_data == {"images": ["image://a.png", "image://tool-b.png"]}
 
 
 @pytest.mark.cpu

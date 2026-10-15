@@ -71,6 +71,28 @@ def initialize_generation_prompt(processing_class, **apply_chat_template_kwargs)
     return with_generation_prompt[len(without_generation_prompt) :]
 
 
+def _flatten_image_url_blocks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rewrite OpenAI ``{"image_url": {"url": u}}`` blocks to ``{"image_url": u}``.
+
+    ``qwen_vl_utils`` reads ``image_url`` as a plain string, while OpenAI-protocol
+    clients (and the Anthropic adapter) send the nested ``{"url": ...}`` form.
+    """
+    flattened: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            flattened.append(message)
+            continue
+        blocks = [
+            {**block, "image_url": block["image_url"]["url"]}
+            if isinstance(block, dict) and isinstance(block.get("image_url"), dict) and "url" in block["image_url"]
+            else block
+            for block in content
+        ]
+        flattened.append({**message, "content": blocks})
+    return flattened
+
+
 class MessageCodec:
     """Model-scoped request codec used by gateway sessions.
 
@@ -162,7 +184,7 @@ class MessageCodec:
         from qwen_vl_utils import process_vision_info
 
         return process_vision_info(
-            messages,
+            _flatten_image_url_blocks(messages),
             image_patch_size=image_patch_size,
             return_video_metadata=True,
         )
@@ -246,9 +268,12 @@ class MessageCodec:
         video_data: list[Any] | None = None,
     ) -> tuple[list[int], list[int], list[float] | None]:
         """Merge appended context and align response metadata."""
-        if image_data or video_data:
+        if video_data:
+            raise ValueError("Continuous Token context merging does not currently support incremental video data")
+        if image_data and not self._continuous_token_builder.supports_multimodal():
             raise ValueError(
-                "Continuous Token context merging does not currently support incremental image or video data"
+                "Continuous Token context merging does not support incremental image data "
+                f"for {type(self._continuous_token_builder).__name__} (not a multimodal builder)"
             )
         merge_result = self._continuous_token_builder.merge_context_tokens(
             previous_messages,
