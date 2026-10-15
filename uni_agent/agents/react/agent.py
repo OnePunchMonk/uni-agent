@@ -196,21 +196,30 @@ class ReActAgent(Agent):
                             "content": "Skipped: timeout budget exhausted.",
                         }
                     )
+                _append_image_message(transcript, pending_images)
                 return "timeout_limit"
             if name in _FINISH_TOOLS and tool_result.status == "ok":
                 saw_finish = True
-        if pending_images:
-            # `tool` messages cannot hold image parts, so images ride in one user message
-            # placed after every tool message of this turn (tool replies must stay contiguous).
-            transcript.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Images returned by the tool calls above:"},
-                        *({"type": "image_url", "image_url": {"url": url}} for url in pending_images),
-                    ],
-                }
-            )
+        _append_image_message(transcript, pending_images)
         if saw_finish:
             logger.info("💬 FINISHED: policy called a finish tool.")
         return "finished" if saw_finish else "completed"
+
+
+def _append_image_message(transcript: list[dict[str, Any]], images: list[str]) -> None:
+    """Add tool-returned images as one user message after the turn's tool messages.
+
+    `tool` messages cannot hold image parts, and tool replies must stay contiguous
+    after the assistant message, so the images follow the last of them.
+    """
+    if not images:
+        return
+    transcript.append(
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Images returned by the tool calls above:"},
+                *({"type": "image_url", "image_url": {"url": url}} for url in images),
+            ],
+        }
+    )

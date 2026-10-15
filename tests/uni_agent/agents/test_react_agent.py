@@ -338,3 +338,27 @@ async def test_text_only_tool_results_add_no_user_message():
     await agent.step(cfg, model, _StepToolbox(), transcript, _step_info())
 
     assert [m["role"] for m in transcript] == ["assistant", "tool"]
+
+
+@pytest.mark.cpu
+@pytest.mark.level0
+@pytest.mark.asyncio
+async def test_tool_images_survive_timeout_budget_exit():
+    agent = _agent()
+    cfg: ReActConfig = agent.config  # type: ignore[assignment]
+    calls = [
+        {"id": f"call-{i}", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}} for i in range(3)
+    ]
+    model = _StepModel(tool_calls=calls, finish_reason="tool_calls")
+    shot = "data:image/png;base64,AAAA"
+    info = _step_info()
+    info["timeouts"] = cfg.timeout_budget  # the next timeout exceeds the budget
+    transcript: list[dict] = []
+
+    reason = await agent.step(
+        cfg, model, _StepToolbox(ToolResult(text="slow", status="timeout", images=(shot,))), transcript, info
+    )
+
+    assert reason == "timeout_limit"
+    assert [m["role"] for m in transcript] == ["assistant", "tool", "tool", "tool", "user"]
+    assert transcript[-1]["content"][1]["image_url"]["url"] == shot
