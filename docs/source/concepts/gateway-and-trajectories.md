@@ -142,6 +142,22 @@ The Gateway uses a `MessageCodec` to:
 
 The configured Tool parser must match the model's chat template.
 
+## Images and Videos Mid-Trajectory
+
+Media can appear after the opening request, for example a screenshot returned by a Tool on turn five. When a continuation request brings new images or videos, the Gateway:
+
+1. Extracts the new media from the appended messages.
+2. Renders the previous conversation and the full conversation through the processor, each with the same processed media the rollout backend receives, and appends only the token suffix to the runtime stream.
+3. Extends the chain's `multi_modal_data` in order, so the finalized trajectory lists every image and video that was sent.
+
+Rendering from the processed media, rather than re-reading the message blocks, keeps the appended tokens aligned with what the backend sees, even when decoding or resizing would otherwise differ.
+
+Requirements and limits:
+
+- The model needs a processor-backed multimodal Continuous Token builder; for other builders the request fails with a clear error.
+- The default extractor accepts OpenAI `{"image_url": {"url": ...}}` blocks as well as `qwen_vl_utils` blocks.
+- Image pad tokens are context, so they carry `response_mask` `0`.
+
 ## Multiple Turns and Chains
 
 One session may contain multiple model turns. Tool observations are encoded as continuation tokens and marked with `response_mask=0`, while model completions are marked with `response_mask=1`.
