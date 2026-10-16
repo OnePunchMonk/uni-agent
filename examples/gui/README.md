@@ -38,3 +38,10 @@ sandbox, and `coordinate_space: relative_1000`.
 python examples/gui/run_gui_task.py --provider docker --image uni-agent-gui
 ```
 
+## Check the gateway path
+
+`gateway_rollout_check.py` runs one episode through the real Gateway with an in-process vLLM engine
+(needs a GPU and `vllm==0.23.0`; the docstring lists the rest) and audits the captured trajectory:
+aligned response arrays, one 768-token block per screenshot, image pad tokens masked out, and every
+screenshot listed in `multi_modal_data`.
+
