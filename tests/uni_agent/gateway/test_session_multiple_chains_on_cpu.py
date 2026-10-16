@@ -1609,34 +1609,32 @@ async def test_multiple_chains_video_media_stays_chain_local():
 @pytest.mark.cpu
 @pytest.mark.level0
 @pytest.mark.asyncio
-async def test_multiple_chains_rejects_incremental_video_without_mutating_stored_media():
-    """Reject unsupported CT video without mutating the selected chain."""
-    sent_url, unsent_url = "video://sent-a.mp4", "video://unsent-b.mp4"
-    first_messages = [_video_message(sent_url, "describe first")]
+async def test_multiple_chains_continues_with_incremental_video():
+    """A video that first appears mid-trajectory extends the chain's videos in order."""
+    first_url, second_url = "video://sent-a.mp4", "video://later-b.mp4"
+    first_messages = [_video_message(first_url, "describe first")]
     continuation_messages = [
         *first_messages,
         {"role": "assistant", "content": "FIRST"},
-        _video_message(unsent_url, "new incremental media"),
+        _video_message(second_url, "new clip"),
     ]
-    expected_sent = [(sent_url, {"url": sent_url})]
+    first_video, second_video = (first_url, {"url": first_url}), (second_url, {"url": second_url})
     session = _session(
-        "incremental-media-video",
+        "incremental-video",
         processor=FakeProcessor(),
         vision_info_extractor=_codec_compatible_video_extractor,
     )
-    backend = SequencedBackend(["FIRST", "SHOULD_NOT_RUN"])
+    backend = SequencedBackend(["FIRST", "SECOND"])
 
     await _run(session, backend, first_messages)
-    with pytest.raises(ValueError, match="does not currently support incremental video data"):
-        await _run(session, backend, continuation_messages)
+    await _run(session, backend, continuation_messages)
     trajectories = await session.finalize()
 
-    assert len(backend.calls) == 1
-    assert backend.steps == ["SHOULD_NOT_RUN"]
-    assert backend.calls[0]["video_data"] == expected_sent
+    assert len(backend.calls) == 2
+    assert backend.calls[0]["video_data"] == [first_video]
+    assert backend.calls[1]["video_data"] == [first_video, second_video]
     assert len(trajectories) == 1
-    assert trajectories[0].multi_modal_data == {"videos": expected_sent}
-    assert trajectories[0].extra_fields == {}
+    assert trajectories[0].multi_modal_data == {"videos": [first_video, second_video]}
 
 
 @pytest.mark.cpu

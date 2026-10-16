@@ -266,27 +266,87 @@ class MessageCodec:
         tools: list[dict[str, Any]] | None = None,
         image_data: list[Any] | None = None,
         video_data: list[Any] | None = None,
+        previous_image_data: list[Any] | None = None,
+        previous_video_data: list[Any] | None = None,
     ) -> tuple[list[int], list[int], list[float] | None]:
-        """Merge appended context and align response metadata."""
-        if video_data:
-            raise ValueError("Continuous Token context merging does not currently support incremental video data")
-        if image_data and not self._continuous_token_builder.supports_multimodal():
-            raise ValueError(
-                "Continuous Token context merging does not support incremental image data "
-                f"for {type(self._continuous_token_builder).__name__} (not a multimodal builder)"
+        """Merge appended context and align response metadata.
+
+        ``image_data`` / ``video_data`` are the media first appearing in the appended
+        messages; ``previous_*`` are the media already sent for ``previous_messages``.
+        """
+        builder = self._continuous_token_builder
+        if image_data or video_data:
+            if not builder.supports_multimodal():
+                raise ValueError(
+                    "Continuous Token context merging does not support incremental image or video data "
+                    f"for {type(builder).__name__} (not a multimodal builder)"
+                )
+            merge_result = self._merge_multimodal_context(
+                previous_messages,
+                updated_messages,
+                runtime_token_ids,
+                tools=tools,
+                previous_image_data=list(previous_image_data or []),
+                previous_video_data=list(previous_video_data or []),
+                image_data=list(image_data or []),
+                video_data=list(video_data or []),
             )
-        merge_result = self._continuous_token_builder.merge_context_tokens(
-            previous_messages,
-            updated_messages,
-            runtime_token_ids,
-            tools=tools,
-        )
-        response_mask, response_logprobs = self._continuous_token_builder.align_response_metadata(
+        else:
+            merge_result = builder.merge_context_tokens(
+                previous_messages,
+                updated_messages,
+                runtime_token_ids,
+                tools=tools,
+            )
+        response_mask, response_logprobs = builder.align_response_metadata(
             merge_result,
             response_mask,
             response_logprobs,
         )
         return merge_result.token_ids, response_mask, response_logprobs
+
+    def _merge_multimodal_context(
+        self,
+        previous_messages: list[dict[str, Any]],
+        updated_messages: list[dict[str, Any]],
+        runtime_token_ids: list[int],
+        *,
+        tools: list[dict[str, Any]] | None,
+        previous_image_data: list[Any],
+        previous_video_data: list[Any],
+        image_data: list[Any],
+        video_data: list[Any],
+    ) -> Any:
+        """Append context that carries new media, rendering with the media the backend receives.
+
+        The builder's own incremental render re-reads media from the message blocks,
+        which can decode or resize differently from the processed images / videos sent
+        to the rollout backend. Rendering the prefix and the full conversation with those
+        same processed objects keeps the appended tokens aligned with the backend input.
+        """
+        builder = self._continuous_token_builder
+        prefix_ids = builder.render_tokens_with_mm(
+            previous_messages,
+            previous_image_data,
+            videos=previous_video_data or None,
+            add_generation_prompt=False,
+            tools=tools,
+        )
+        full_ids = builder.render_tokens_with_mm(
+            updated_messages,
+            previous_image_data + image_data,
+            videos=(previous_video_data + video_data) or None,
+            add_generation_prompt=True,
+            tools=tools,
+        )
+        if full_ids[: len(prefix_ids)] != prefix_ids:
+            raise ValueError("Continuous Token multimodal suffix diff failed: prefix render is not a token prefix")
+        return builder._merge_context_token_ids(
+            runtime_token_ids,
+            full_ids[len(prefix_ids) :],
+            previous_messages=previous_messages,
+            appended_messages=updated_messages[len(previous_messages) :],
+        )
 
     def _process_tool_calls_sglang(
         self,

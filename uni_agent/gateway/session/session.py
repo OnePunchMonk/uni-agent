@@ -630,6 +630,8 @@ class GatewaySession:
                     tools=tools,
                     image_data=new_image_data,
                     video_data=new_video_data,
+                    previous_image_data=image_data,
+                    previous_video_data=video_data,
                 )
                 capacity_exhausted = (
                     self._trajectory_capacity is not None and len(merged_token_ids) >= self._trajectory_capacity

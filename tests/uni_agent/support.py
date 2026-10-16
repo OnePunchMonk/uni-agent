@@ -67,14 +67,33 @@ class FakeProcessor:
         self.last_processor_call = None
         self.last_get_rope_index_call = None
 
+    # Placeholder characters the fake chat template leaves where media blocks sit, so
+    # ``__call__`` can expand them in place the way real VL processors do.
+    IMAGE_MARKER = "\ue000"
+    VIDEO_MARKER = "\ue001"
+
     def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=True, tools=None, **kwargs):
         return self.tokenizer.apply_chat_template(
-            messages,
+            [self._with_media_markers(message) for message in messages],
             tokenize=tokenize,
             add_generation_prompt=add_generation_prompt,
             tools=tools,
             **kwargs,
         )
+
+    def _with_media_markers(self, message):
+        content = message.get("content")
+        if not isinstance(content, list):
+            return message
+        markers = {"image": self.IMAGE_MARKER, "image_url": self.IMAGE_MARKER}
+        markers.update({"video": self.VIDEO_MARKER, "video_url": self.VIDEO_MARKER})
+        parts = [
+            {"type": "text", "text": markers[part["type"]]}
+            if isinstance(part, dict) and part.get("type") in markers
+            else part
+            for part in content
+        ]
+        return {**message, "content": parts}
 
     def __call__(
         self,
@@ -99,20 +118,30 @@ class FakeProcessor:
         }
 
         prompt_ids = self.tokenizer.encode(text[0], add_special_tokens=False)
-        media_token_ids = []
-        if images:
-            media_token_ids.extend([self.image_token_id] * len(images))
-        if videos:
-            media_token_ids.extend([self.video_token_id] * len(videos))
-        # Real VL processors expand media placeholders inside the rendered
-        # message, before a trailing assistant scaffold. Preserve that prefix
-        # stability so Continuous Token can suffix-diff renders with and without
-        # ``add_generation_prompt``.
-        generation_prompt_ids = self.tokenizer.encode("assistant:", add_special_tokens=False)
-        if media_token_ids and prompt_ids[-len(generation_prompt_ids) :] == generation_prompt_ids:
-            prompt_ids[-len(generation_prompt_ids) :] = media_token_ids + generation_prompt_ids
+        image_marker, video_marker = ord(self.IMAGE_MARKER), ord(self.VIDEO_MARKER)
+        n_images, n_videos = len(images or []), len(videos or [])
+        if (
+            prompt_ids.count(image_marker) == n_images
+            and prompt_ids.count(video_marker) == n_videos
+            and (n_images or n_videos)
+        ):
+            # Expand each placeholder in place, like a real VL processor.
+            prompt_ids = [
+                self.image_token_id if t == image_marker else self.video_token_id if t == video_marker else t
+                for t in prompt_ids
+            ]
         else:
-            prompt_ids.extend(media_token_ids)
+            media_token_ids = []
+            if images:
+                media_token_ids.extend([self.image_token_id] * len(images))
+            if videos:
+                media_token_ids.extend([self.video_token_id] * len(videos))
+            # Without placeholders, put media before a trailing assistant scaffold.
+            generation_prompt_ids = self.tokenizer.encode("assistant:", add_special_tokens=False)
+            if media_token_ids and prompt_ids[-len(generation_prompt_ids) :] == generation_prompt_ids:
+                prompt_ids[-len(generation_prompt_ids) :] = media_token_ids + generation_prompt_ids
+            else:
+                prompt_ids.extend(media_token_ids)
 
         input_ids = torch.tensor([prompt_ids], dtype=torch.long)
         attention_mask = torch.ones_like(input_ids)
