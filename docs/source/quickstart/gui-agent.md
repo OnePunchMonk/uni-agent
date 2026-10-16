@@ -47,4 +47,4 @@ print(asyncio.run(task.run()))
 - **Coordinates.** Qwen-VL models answer on a 0-1000 grid, so use `coordinate_space: relative_1000`. Other models that answer in screen pixels use the default `pixel`.
 - **Prompt.** Small models may click without looking. Tell the model to take a screenshot first and to check the result before finishing.
 - **Parallel episodes.** Each episode needs its own X server. Use a per-session Sandbox such as Docker; with the `local` provider every episode shares one display.
-- **Training.** Screenshots that first appear mid-episode are supported by the [Gateway](../concepts/gateway-and-trajectories.md#images-and-videos-mid-trajectory), so the same Task can run under RL rollouts with a vision-language policy.
+- **Training.** Screenshots that first appear mid-episode are handled by the [Gateway](../concepts/gateway-and-trajectories.md) when the model has a multimodal processor, so the same Task can run under RL rollouts with a vision-language policy.
